@@ -1,11 +1,12 @@
 use rand::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
     ops::*,
     usize,
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Matrix<T = f32> {
     rows: usize,  // 有多少行
     cols: usize,  // 有多少列
@@ -14,7 +15,7 @@ pub struct Matrix<T = f32> {
 
 impl<T> Matrix<T>
 where
-    T: Default + Clone,
+    T: Default + Copy,
 {
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
@@ -32,7 +33,31 @@ where
         Self { rows, cols, data }
     }
 
-    // 随机初始化
+    pub fn with_cols(cols: usize, data: Vec<Vec<T>>) -> Self {
+        let mut this = Self {
+            rows: data.len(),
+            cols,
+            data: {
+                let mut data = Vec::with_capacity(data.len() * cols);
+                data.resize(data.capacity(), T::default());
+                data
+            },
+        };
+        for r in 0..data.len() {
+            for c in 0..data.get(r).map_or(0, |d| d.len()) {
+                let v = data.get(r).map_or(T::default(), |d| {
+                    d.get(c).map_or(T::default(), |u| u.clone())
+                });
+                this.data.get_mut(r * this.cols + c).and_then(|e| {
+                    *e = v;
+                    Some(())
+                });
+            }
+        }
+        this
+    }
+
+    /// 随机初始化
     pub fn rand<R>(&mut self, range: R)
     where
         T: rand::distributions::uniform::SampleUniform,
@@ -43,7 +68,7 @@ where
         }
     }
 
-    // 求矩阵每一个元素的exp
+    /// 求矩阵每一个元素的exp
     pub fn exp(&self) -> Self
     where
         T: Exp,
@@ -55,7 +80,7 @@ where
         result
     }
 
-    // 矩阵转置
+    /// 矩阵转置
     pub fn transpose(&self) -> Result<Self, Error>
     where
         T: Copy,
@@ -69,7 +94,7 @@ where
         Ok(result)
     }
 
-    // 数学上的叉乘
+    /// 数学上的叉乘
     pub fn cross(&self, rhs: &Self) -> Result<Self, Error>
     where
         T: Mul<Output = T> + Add<Output = T> + Default + Copy,
@@ -88,7 +113,7 @@ where
         Ok(result)
     }
 
-    // 点乘
+    /// 点乘
     pub fn dot(&self, rhs: &Self) -> Result<Self, Error>
     where
         T: Mul<T, Output = T> + Copy,
@@ -137,7 +162,7 @@ where
         self.data.resize(self.rows * self.cols, T::default());
     }
 
-    // 减去一个矩阵，获得一个新的矩阵
+    /// 减去一个矩阵，获得一个新的矩阵
     pub fn sub(&self, rhs: &Self) -> Result<Self, Error>
     where
         T: Sub<Output = T> + Default + Copy,
@@ -164,9 +189,24 @@ where
         }
         Ok(())
     }
+    
+    pub fn add_to(&mut self, rhs: &Self) -> Result<(), Error>
+    where
+        T: Add<Output = T> + Default + Copy,
+    {
+        if self.rows != rhs.rows || self.cols != rhs.cols {
+            return Err(Error::Uncomputable);
+        }
+        for i in 0..self.data.len() {
+            self.data[i] = self.data[i] + rhs.data[i];
+        }
+        Ok(())
+    }
 
+    /// 乘于一个常数
     pub fn mul_num(&self, num: T) -> Self
-    where T: Mul<T, Output = T> + Copy,
+    where
+        T: Mul<T, Output = T> + Copy,
     {
         let result = self.data.iter().map(|x| *x * num).collect();
         Self::with_data(self.rows, self.cols, result)
@@ -187,7 +227,7 @@ impl<T> IndexMut<(usize, usize)> for Matrix<T> {
     }
 }
 
-// 求自然数e的幂
+/// 求自然数e的幂
 pub trait Exp {
     fn mexp(&self) -> Self;
 }
@@ -201,6 +241,19 @@ impl Exp for f32 {
 impl Exp for f64 {
     fn mexp(&self) -> Self {
         self.exp()
+    }
+}
+
+// 取反
+impl<T> Neg for Matrix<T>
+where
+    T: Neg<Output = T> + Copy + Default + Clone,
+{
+    type Output = Matrix<T>;
+
+    fn neg(self) -> Self::Output {
+        let data = self.data.iter().map(|x| -*x).collect();
+        Matrix::with_data(self.rows, self.cols, data)
     }
 }
 
@@ -280,14 +333,14 @@ impl Div<Matrix> for f32 {
 impl<T, R> Mul<R> for Matrix<T>
 where
     T: Clone + Mul<R, Output = T> + Copy + Default,
-    R: Copy
+    R: Copy,
 {
     type Output = Self;
 
     fn mul(self, rhs: R) -> Self::Output {
         let mut result = self.clone();
         for i in 0..result.data.len() {
-            result.data[i] = result.data[i] * rhs;
+            result.data[i] = self.data[i] * rhs;
         }
         result
     }
@@ -324,7 +377,7 @@ where
             if self.rows == 1 {
                 s.push_str("[");
                 s.push_str(&s1);
-                s.push_str("]\n");
+                s.push_str("]");
             } else if i == 0 {
                 s.push_str("╭");
                 s.push_str(&s1);
@@ -332,7 +385,7 @@ where
             } else if i == self.rows - 1 {
                 s.push_str("╰");
                 s.push_str(&s1);
-                s.push_str("╯\n");
+                s.push_str("╯");
             } else {
                 s.push_str("│");
                 s.push_str(&s1);
@@ -341,6 +394,12 @@ where
         }
         write!(f, "{}", s)
     }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    /// 不可计算
+    Uncomputable,
 }
 
 mod test {
@@ -352,7 +411,7 @@ mod test {
         assert_eq!(m.data, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
-    // 测试矩阵相加
+    /// 测试矩阵相加
     #[test]
     fn test_matrix_add() {
         let m1 = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
@@ -364,7 +423,7 @@ mod test {
         assert!(m4.map_or(true, |_| false));
     }
 
-    // 测试矩阵切片
+    /// 测试矩阵切片
     #[test]
     fn test_matrix_index() {
         let m = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
@@ -374,7 +433,7 @@ mod test {
         assert_eq!(m[(1, 1)], 4);
     }
 
-    // 测试叉乘
+    /// 测试叉乘
     #[test]
     fn test_matrix_cross() {
         let m1 = Matrix::with_data(2, 3, vec![1, 2, 3, 4, 5, 6]);
@@ -383,7 +442,7 @@ mod test {
         assert_eq!(m3.data, vec![22, 28, 49, 64]);
     }
 
-    // 测试点乘
+    /// 测试点乘
     #[test]
     fn test_matrix_dot() {
         let m1 = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
@@ -409,17 +468,49 @@ mod test {
         assert!(m1.dot(&m2).map_or(true, |_| false));
     }
 
-    // 测试矩阵转置
+    /// 测试矩阵转置
     #[test]
     fn test_matrix_transpose() {
         let m = Matrix::with_data(2, 3, vec![1, 2, 3, 4, 5, 6]);
         let m1 = m.transpose().unwrap();
         assert_eq!(m1.data, vec![1, 4, 2, 5, 3, 6]);
     }
-}
 
-#[derive(Debug)]
-pub enum Error {
-    // 不可计算
-    Uncomputable,
+    /// 测试矩阵乘以一个数
+    #[test]
+    fn test_matrix_mul() {
+        let m = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        let m1 = m.mul_num(2);
+        assert_eq!(m1.data, vec![2, 4, 6, 8]);
+    }
+
+    /// 测试矩阵相减
+    #[test]
+    fn test_matrix_sub() {
+        let m1 = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        let m2 = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        let m3 = m1 - &m2;
+        assert_eq!(m3.map_or(Matrix::default(), |i| i).data, vec![0, 0, 0, 0]);
+        let m4 = Matrix::with_data(2, 3, vec![1, 2, 3, 4, 5, 6])
+            - &Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        assert!(m4.map_or(true, |_| false));
+    }
+
+    /// 测试矩阵乘以一个常数
+    #[test]
+    fn test_matrix_mul_num() {
+        let m = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        let m1 = m.mul_num(2);
+        assert_eq!(m1.data, vec![2, 4, 6, 8]);
+        let m1 = m * 3;
+        assert_eq!(m1.data, vec![3, 6, 9, 12]);
+    }
+
+    /// 测试矩阵取反
+    #[test]
+    fn test_matrix_neg() {
+        let m = Matrix::with_data(2, 2, vec![1, 2, 3, 4]);
+        let m1 = -m;
+        assert_eq!(m1.data, vec![-1, -2, -3, -4]);
+    }
 }

@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::matrix::{self, Matrix};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct NeuralNetwork {
     // 权重
     weights: Vec<Matrix<f32>>,
@@ -8,6 +10,14 @@ pub struct NeuralNetwork {
     biases: Vec<Matrix<f32>>,
     // 学习率
     learning_rate: f32,
+}
+
+/// 激活函数
+#[derive(Debug)]
+pub enum Activation {
+    Sigmoid,
+    Relu,
+    Tanh,
 }
 
 impl NeuralNetwork {
@@ -28,6 +38,10 @@ impl NeuralNetwork {
         }
     }
 
+    pub fn set_learning_rate(&mut self, learning_rate: f32) {
+        self.learning_rate = learning_rate;
+    }
+
     pub fn rand_weights(&mut self) {
         for i in 0..self.weights.len() {
             self.weights[i].rand(-1.0f32..1.0f32);
@@ -44,7 +58,12 @@ impl NeuralNetwork {
     // X: 输入
     // Y: 输出
     // count: 训练次数
-    pub fn practice(&mut self, X: &Vec<Matrix>, Y: &Vec<Matrix>, count: usize) -> Result<(), Error> {
+    pub fn practice(
+        &mut self,
+        X: &Vec<Matrix>,
+        Y: &Vec<Matrix>,
+        count: usize,
+    ) -> Result<(), Error> {
         for _ in 0..count {
             for i in 0..X.len() {
                 let x = X.get(i).ok_or(Error::Empty)?;
@@ -57,25 +76,17 @@ impl NeuralNetwork {
                 Self::update_weight(
                     self.learning_rate,
                     x,
-                    self.weights
-                        .get_mut(0)
-                        .map_or(Err(Error::Empty), |w| Ok(w))?,
-                    self.biases
-                        .get_mut(0)
-                        .map_or(Err(Error::Empty), |bia| Ok(bia))?,
-                    deltas.get(0).map_or(Err(Error::Empty), |d| Ok(d))?,
+                    self.weights.get_mut(0).ok_or(Error::Empty)?,
+                    self.biases.get_mut(0).ok_or(Error::Empty)?,
+                    deltas.get(0).ok_or(Error::Empty)?,
                 )?;
                 for i in 1..self.weights.len() {
                     Self::update_weight(
                         self.learning_rate,
-                        ls.get(i - 1).map_or(Err(Error::Empty), |l| Ok(l))?,
-                        self.weights
-                            .get_mut(i)
-                            .map_or(Err(Error::Empty), |w| Ok(w))?,
-                        self.biases
-                            .get_mut(i)
-                            .map_or(Err(Error::Empty), |bia| Ok(bia))?,
-                        deltas.get(i).map_or(Err(Error::Empty), |d| Ok(d))?,
+                        ls.get(i - 1).ok_or(Error::Empty)?,
+                        self.weights.get_mut(i).ok_or(Error::Empty)?,
+                        self.biases.get_mut(i).ok_or(Error::Empty)?,
+                        deltas.get(i).ok_or(Error::Empty)?,
                     )?;
                 }
             }
@@ -91,8 +102,8 @@ impl NeuralNetwork {
         delta: &Matrix,
     ) -> Result<(), Error> {
         let d = x.transpose()?.cross(delta)?;
-        weight.sub_to(&(d * learning_rate))?;
-        bias.sub_to(&delta.mul_num(learning_rate))?;
+        weight.add_to(&(d.mul_num(learning_rate)))?;
+        bias.add_to(&delta.mul_num(learning_rate))?;
         Ok(())
     }
 
@@ -114,21 +125,17 @@ impl NeuralNetwork {
         }
         let mut i = self.weights.len() - 2;
         loop {
-            let l = ls.get(i).map_or(Err(Error::Empty), |l| Ok(l))?;
-            let w = self
-                .weights
-                .get(i + 1)
-                .map_or(Err(Error::Empty), |w| Ok(w))?;
-            let d = deltas.get(i + 1).map_or(Err(Error::Empty), |d| Ok(d))?;
+            let l = ls.get(i).ok_or(Error::Empty)?;
+            let w = self.weights.get(i + 1).ok_or(Error::Empty)?;
+            let d = deltas.get(i + 1).ok_or(Error::Empty)?;
             let error = d.cross(&w.transpose()?)?;
             let slope = l.dot(&(1.0f32 - l))?;
             deltas[i] = error.dot(&slope)?;
 
             if i == 0 {
                 break;
-            } else {
-                i -= 1;
             }
+            i -= 1;
         }
         Ok(deltas)
     }
@@ -152,11 +159,11 @@ impl NeuralNetwork {
     pub fn fp_layer(input: &Matrix, weight: &Matrix, bias: &Matrix) -> Result<Matrix, Error> {
         let mut z = input.cross(weight)?;
         z = (z + bias)?;
-        Ok(Self::sigmoid(&z))
+        Ok(Self::sigmoid(z))
     }
 
-    pub fn sigmoid(z: &Matrix) -> Matrix {
-        return 1.0f32 / (1.0f32 + z.exp());
+    pub fn sigmoid(z: Matrix) -> Matrix {
+        return 1.0f32 / (1.0f32 + (-z).exp());
     }
 }
 
@@ -166,9 +173,11 @@ impl ToString for NeuralNetwork {
         for i in 0..self.weights.len() {
             s.push_str(&format!("Layer {}\n", i + 1));
             s.push_str(&self.weights[i].to_string());
-            s.push_str(&format!("Biaese {}\n", i + 1));
+            s.push_str(&format!("\nBiaese {}\n", i + 1));
             s.push_str(&self.biases[i].to_string());
+            s.push_str("\n");
         }
+        s.pop();
         s
     }
 }
@@ -200,8 +209,8 @@ mod test {
     // 测试sigmoid函数
     #[test]
     fn test_sigmoid() {
-        let z = Matrix::with_data(1, 3, vec![0.65, 0.12, 0.63]);
-        let a = NeuralNetwork::sigmoid(&z);
+        let z = Matrix::with_data(1, 3, vec![9.65, 0.12, 0.63]);
+        let a = NeuralNetwork::sigmoid(z);
         println!("{}", a);
     }
 
