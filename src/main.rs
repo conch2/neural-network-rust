@@ -6,11 +6,11 @@ mod matrix;
 mod neural_network;
 
 fn main() {
-    let mut nn = neural_network::NeuralNetwork::new(vec![3, 6, 1]);
+    let mut nn = neural_network::NeuralNetwork::new(vec![3, 16, 16, 1]);
     // 生成随机权重和偏置
     nn.rand_weights();
     nn.rand_biases();
-    nn.set_learning_rate(0.05);
+    nn.set_learning_rate(0.5);
     println!("{}\n", nn.to_string());
     let input = matrix::Matrix::with_data(1, 3, vec![1., 1., 0.]);
     println!("input: \n{}", input);
@@ -32,15 +32,18 @@ fn main() {
 
     // 获取时间间隔
     let start = std::time::Instant::now();
-    let count = 50;
-    let step = 1000;
+    let count = 10;
+    let step = 5000;
+    println!("Start training...");
     for i in 1..=count {
+        let t = std::time::Instant::now();
         nn.practice(&x, &y, step).unwrap();
-        if i % 10 == 0 {
-            let output = nn.fp(&input).unwrap();
-            println!("output: {}", output[output.len() - 1]);
-            println!("{}/{}", i, count);
-        }
+
+        let output = nn.fp(&input).unwrap();
+        println!("LR: {}\t output: {}", nn.get_learning_rate(), output[output.len() - 1]);
+        println!("{}/{}\t{:?}", i, count, t.elapsed());
+
+        nn.set_learning_rate(nn.get_learning_rate() * 0.5);
     }
     // 输出耗时
     println!("Time: {:?}", start.elapsed());

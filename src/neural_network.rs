@@ -38,6 +38,10 @@ impl NeuralNetwork {
         }
     }
 
+    pub fn get_learning_rate(&self) -> f32 {
+        self.learning_rate
+    }
+
     pub fn set_learning_rate(&mut self, learning_rate: f32) {
         self.learning_rate = learning_rate;
     }
