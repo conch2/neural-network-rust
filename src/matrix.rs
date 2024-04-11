@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
     ops::*,
-    usize,
 };
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -21,12 +20,30 @@ where
         Self {
             rows,
             cols,
-            data: {
-                let mut data = Vec::with_capacity(rows * cols);
-                data.resize(data.capacity(), T::default());
-                data
-            },
+            data: { vec![T::default(); rows * cols] },
         }
+    }
+
+    pub fn with(data: Vec<Vec<T>>) -> Self {
+        let rows = data.len();
+        let cols = data.get(0).map_or(0, |d| d.len());
+        let mut this = Self {
+            rows,
+            cols,
+            data: vec![T::default(); rows * cols],
+        };
+        for r in 0..rows {
+            for c in 0..cols {
+                let v = data.get(r).map_or(T::default(), |d| {
+                    d.get(c).map_or(T::default(), |u| u.clone())
+                });
+                this.data.get_mut(r * cols + c).and_then(|e| {
+                    *e = v;
+                    Some(())
+                });
+            }
+        }
+        this
     }
 
     pub fn with_data(rows: usize, cols: usize, data: Vec<T>) -> Self {
@@ -37,11 +54,7 @@ where
         let mut this = Self {
             rows: data.len(),
             cols,
-            data: {
-                let mut data = Vec::with_capacity(data.len() * cols);
-                data.resize(data.capacity(), T::default());
-                data
-            },
+            data: vec![T::default(); data.len() * cols],
         };
         for r in 0..data.len() {
             for c in 0..data.get(r).map_or(0, |d| d.len()) {
@@ -55,6 +68,18 @@ where
             }
         }
         this
+    }
+
+    pub fn new_empty(rows: usize, cols: usize) -> Self {
+        Self {
+            rows,
+            cols,
+            data: {
+                let mut d = Vec::with_capacity(rows * cols);
+                unsafe { d.set_len(d.capacity()) }
+                d
+            },
+        }
     }
 
     /// 随机初始化
@@ -85,6 +110,11 @@ where
     where
         T: Copy,
     {
+        if self.rows == 1 || self.cols == 1 {
+            let mut result = self.clone();
+            std::mem::swap(&mut result.rows, &mut result.cols);
+            return Ok(result);
+        }
         let mut result = Self::new(self.cols, self.rows);
         for i in 0..self.rows {
             for j in 0..self.cols {
@@ -124,7 +154,7 @@ where
         if self.cols != rhs.cols && self.cols != 1 {
             return Err(Error::Uncomputable);
         }
-        let mut result = Self::new(rhs.rows, rhs.cols);
+        let mut result = Self::new_empty(rhs.rows, rhs.cols);
         if self.rows == 1 {
             for r in 0..result.rows {
                 for c in 0..result.cols {
@@ -151,6 +181,18 @@ where
     }
     pub fn col(&self) -> usize {
         self.cols
+    }
+    pub fn get_data(&self) -> &Vec<T> {
+        &self.data
+    }
+    pub fn get_data_mut(&mut self) -> &mut Vec<T> {
+        &mut self.data
+    }
+    pub fn get_row(&self, row: usize) -> Option<&[T]> {
+        if row >= self.rows {
+            return None;
+        }
+        Some(&self.data[row * self.cols..(row + 1) * self.cols])
     }
 
     pub fn set_row(&mut self, row: usize) {
@@ -189,7 +231,7 @@ where
         }
         Ok(())
     }
-    
+
     pub fn add_to(&mut self, rhs: &Self) -> Result<(), Error>
     where
         T: Add<Output = T> + Default + Copy,
@@ -251,9 +293,9 @@ where
 {
     type Output = Matrix<T>;
 
-    fn neg(self) -> Self::Output {
-        let data = self.data.iter().map(|x| -*x).collect();
-        Matrix::with_data(self.rows, self.cols, data)
+    fn neg(mut self) -> Self::Output {
+        self.data.iter_mut().for_each(|x| *x = -(*x));
+        self
     }
 }
 
@@ -311,7 +353,7 @@ impl Sub<&Matrix> for f32 {
     type Output = Matrix;
 
     fn sub(self, rhs: &Matrix) -> Self::Output {
-        let mut result = rhs.clone();
+        let mut result = Self::Output::new_empty(rhs.rows, rhs.cols);
         for i in 0..rhs.data.len() {
             result.data[i] = self - rhs.data[i];
         }
@@ -338,7 +380,7 @@ where
     type Output = Self;
 
     fn mul(self, rhs: R) -> Self::Output {
-        let mut result = self.clone();
+        let mut result = Self::new_empty(self.rows, self.cols);
         for i in 0..result.data.len() {
             result.data[i] = self.data[i] * rhs;
         }
@@ -402,6 +444,7 @@ pub enum Error {
     Uncomputable,
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 

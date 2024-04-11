@@ -8,20 +8,19 @@ pub struct NeuralNetwork {
     weights: Vec<Matrix<f32>>,
     // 偏置
     biases: Vec<Matrix<f32>>,
-    // 学习率
-    learning_rate: f32,
+    // 激活函数
+    activation: Activation,
 }
 
 /// 激活函数
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Activation {
     Sigmoid,
     Relu,
-    Tanh,
 }
 
 impl NeuralNetwork {
-    pub fn new(layers: Vec<usize>) -> Self {
+    pub fn new(layers: Vec<usize>, activation: Activation) -> Self {
         let mut weights = Vec::with_capacity(layers.len() - 1);
         for i in 0..layers.len() - 1 {
             weights.push(Matrix::new(layers[i], layers[i + 1]));
@@ -34,27 +33,25 @@ impl NeuralNetwork {
         Self {
             weights,
             biases,
-            learning_rate: 0.1,
+            activation,
         }
     }
 
-    pub fn get_learning_rate(&self) -> f32 {
-        self.learning_rate
-    }
-
-    pub fn set_learning_rate(&mut self, learning_rate: f32) {
-        self.learning_rate = learning_rate;
-    }
-
-    pub fn rand_weights(&mut self) {
+    pub fn rand_weights<R>(&mut self, range: R)
+    where
+        R: rand::distributions::uniform::SampleRange<f32> + Clone,
+    {
         for i in 0..self.weights.len() {
-            self.weights[i].rand(-1.0f32..1.0f32);
+            self.weights[i].rand(range.clone());
         }
     }
 
-    pub fn rand_biases(&mut self) {
+    pub fn rand_biases<R>(&mut self, range: R)
+    where
+        R: rand::distributions::uniform::SampleRange<f32> + Clone,
+    {
         for i in 0..self.biases.len() {
-            self.biases[i].rand(-1.0f32..1.0f32);
+            self.biases[i].rand(range.clone());
         }
     }
 
@@ -64,21 +61,22 @@ impl NeuralNetwork {
     // count: 训练次数
     pub fn practice(
         &mut self,
-        X: &Vec<Matrix>,
-        Y: &Vec<Matrix>,
+        x: &Vec<Matrix>,
+        y: &Vec<Matrix>,
+        learning_rate: f32,
         count: usize,
     ) -> Result<(), Error> {
         for _ in 0..count {
-            for i in 0..X.len() {
-                let x = X.get(i).ok_or(Error::Empty)?;
-                let y = Y.get(i).ok_or(Error::Empty)?;
+            for i in 0..x.len() {
+                let x = x.get(i).ok_or(Error::Empty)?;
+                let y = y.get(i).ok_or(Error::Empty)?;
                 // 1. Feedforward
                 let ls = self.fp(x)?;
                 // 2. Backpropagation
                 let deltas = self.bp(y, &ls)?;
                 // 3. Update weights and biases
                 Self::update_weight(
-                    self.learning_rate,
+                    learning_rate,
                     x,
                     self.weights.get_mut(0).ok_or(Error::Empty)?,
                     self.biases.get_mut(0).ok_or(Error::Empty)?,
@@ -86,7 +84,7 @@ impl NeuralNetwork {
                 )?;
                 for i in 1..self.weights.len() {
                     Self::update_weight(
-                        self.learning_rate,
+                        learning_rate,
                         ls.get(i - 1).ok_or(Error::Empty)?,
                         self.weights.get_mut(i).ok_or(Error::Empty)?,
                         self.biases.get_mut(i).ok_or(Error::Empty)?,
@@ -118,8 +116,13 @@ impl NeuralNetwork {
             let ln = ls.get(ls.len() - 1).unwrap();
             // 最后一个权重的误差
             let ln_error = y.sub(ln)?;
-            // 最后一个权重的斜率(激活函数求导)
-            let ln_slope = ln.dot(&(1.0f32 - ln))?;
+            // 最后一个权重的斜率(激活函数偏导)
+            let ln_slope = {
+                match self.activation {
+                    Activation::Sigmoid => ln.dot(&(1.0f32 - ln))?,
+                    Activation::Relu => Self::relu_derivative(ln),
+                }
+            };
             // 最后一个权重的增量
             let ln_delta = ln_error.dot(&ln_slope)?;
             deltas[self.weights.len() - 1] = ln_delta;
@@ -144,30 +147,64 @@ impl NeuralNetwork {
         Ok(deltas)
     }
 
-    pub fn fp(&mut self, input: &Matrix) -> Result<Vec<Matrix>, Error> {
+    pub fn fp(&self, input: &Matrix) -> Result<Vec<Matrix>, Error> {
         if self.weights.len() == 0 {
             return Err(Error::Empty);
         }
         let mut ls = Vec::with_capacity(self.weights.len());
-        ls.push(Self::fp_layer(input, &self.weights[0], &self.biases[0])?);
+        ls.push(Self::fp_layer(
+            input,
+            &self.weights[0],
+            &self.biases[0],
+            self.activation,
+        )?);
         for i in 1..self.weights.len() {
             ls.push(Self::fp_layer(
                 &ls[i - 1],
                 &self.weights[i],
                 &self.biases[i],
+                self.activation,
             )?)
         }
         Ok(ls)
     }
 
-    pub fn fp_layer(input: &Matrix, weight: &Matrix, bias: &Matrix) -> Result<Matrix, Error> {
+    pub fn fp_layer(
+        input: &Matrix,
+        weight: &Matrix,
+        bias: &Matrix,
+        activation: Activation,
+    ) -> Result<Matrix, Error> {
         let mut z = input.cross(weight)?;
-        z = (z + bias)?;
-        Ok(Self::sigmoid(z))
+        z.add_to(bias)?;
+        match activation {
+            Activation::Sigmoid => Ok(Self::sigmoid(z)),
+            Activation::Relu => Ok(Self::relu(z)),
+        }
     }
 
     pub fn sigmoid(z: Matrix) -> Matrix {
         return 1.0f32 / (1.0f32 + (-z).exp());
+    }
+
+    pub fn relu(z: Matrix) -> Matrix {
+        let mut r = Vec::with_capacity(z.row() * z.col());
+        unsafe { r.set_len(r.capacity()) }
+        let z_data = z.get_data();
+        for i in 0..z_data.len() {
+            r[i] = if z_data[i] > 0.0 { z_data[i] } else { 0.0 };
+        }
+        Matrix::with_data(z.row(), z.col(), r)
+    }
+
+    pub fn relu_derivative(l: &Matrix) -> Matrix {
+        let mut r = Vec::with_capacity(l.row() * l.col());
+        unsafe { r.set_len(r.capacity()) }
+        let l_data = l.get_data();
+        for i in 0..l_data.len() {
+            r[i] = if l_data[i] > 0.0 { 1.0 } else { 0.0 };
+        }
+        Matrix::with_data(l.row(), l.col(), r)
     }
 }
 
@@ -200,13 +237,14 @@ impl From<matrix::Error> for Error {
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_neural_network() {
-        let mut nn = NeuralNetwork::new(vec![280, 16, 16, 10]);
-        nn.rand_weights();
+        let mut nn = NeuralNetwork::new(vec![280, 16, 16, 10], Activation::Sigmoid);
+        nn.rand_weights(-1.0..1.0);
         println!("{}", nn.to_string());
     }
 
@@ -221,9 +259,9 @@ mod test {
     // 测试正向传播
     #[test]
     fn test_fp() {
-        let mut nn = NeuralNetwork::new(vec![2, 3, 1]);
-        nn.rand_weights();
-        nn.rand_biases();
+        let mut nn = NeuralNetwork::new(vec![2, 3, 1], Activation::Sigmoid);
+        nn.rand_weights(-1.0..1.0);
+        nn.rand_biases(-1.0..1.0);
         println!("{}\n", nn.to_string());
         let input = Matrix::with_data(1, 2, vec![0.65, 0.12]);
         println!("input: \n{}", input);
