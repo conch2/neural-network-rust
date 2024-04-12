@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 
 use crate::matrix::{self, Matrix};
@@ -53,6 +55,23 @@ impl NeuralNetwork {
         for i in 0..self.biases.len() {
             self.biases[i].rand(range.clone());
         }
+    }
+
+    pub fn set_activation(&mut self, activation: Activation) {
+        self.activation = activation
+    }
+
+    pub fn infer(&self, input: &Matrix) -> Result<Vec<Matrix>, Error> {
+        self.fp(input)
+    }
+
+    pub fn get_layers(&self) -> Vec<usize> {
+        let mut layers = Vec::with_capacity(self.weights.len() + 1);
+        layers.push(self.weights[0].row());
+        for i in 0..self.weights.len() {
+            layers.push(self.weights[i].col());
+        }
+        layers
     }
 
     // 开始训练
@@ -136,7 +155,12 @@ impl NeuralNetwork {
             let w = self.weights.get(i + 1).ok_or(Error::Empty)?;
             let d = deltas.get(i + 1).ok_or(Error::Empty)?;
             let error = d.cross(&w.transpose()?)?;
-            let slope = l.dot(&(1.0f32 - l))?;
+            let slope = {
+                match self.activation {
+                    Activation::Sigmoid => l.dot(&(1.0f32 - l))?,
+                    Activation::Relu => Self::relu_derivative(l),
+                }
+            };
             deltas[i] = error.dot(&slope)?;
 
             if i == 0 {
@@ -158,13 +182,32 @@ impl NeuralNetwork {
             &self.biases[0],
             self.activation,
         )?);
-        for i in 1..self.weights.len() {
+        for i in 1..self.weights.len() - 1 {
             ls.push(Self::fp_layer(
                 &ls[i - 1],
                 &self.weights[i],
                 &self.biases[i],
                 self.activation,
-            )?)
+            )?);
+        }
+        match self.activation {
+            Activation::Sigmoid => {
+                let i = self.weights.len() - 1;
+                ls.push(Self::fp_layer(
+                    &ls[i - 1],
+                    &self.weights[i],
+                    &self.biases[i],
+                    self.activation,
+                )?);
+            }
+            Activation::Relu => {
+                let i = self.weights.len() - 1;
+                ls.push({
+                    let mut z = ls[i - 1].cross(&self.weights[i])?;
+                    z.add_to(&self.biases[i])?;
+                    Self::softmax(z)
+                });
+            }
         }
         Ok(ls)
     }
@@ -187,14 +230,14 @@ impl NeuralNetwork {
         return 1.0f32 / (1.0f32 + (-z).exp());
     }
 
-    pub fn relu(z: Matrix) -> Matrix {
-        let mut r = Vec::with_capacity(z.row() * z.col());
-        unsafe { r.set_len(r.capacity()) }
-        let z_data = z.get_data();
+    pub fn relu(mut z: Matrix) -> Matrix {
+        let z_data = z.get_data_mut();
         for i in 0..z_data.len() {
-            r[i] = if z_data[i] > 0.0 { z_data[i] } else { 0.0 };
+            if z_data[i] < 0.0 {
+                z_data[i] = 0.0
+            }
         }
-        Matrix::with_data(z.row(), z.col(), r)
+        z
     }
 
     pub fn relu_derivative(l: &Matrix) -> Matrix {
@@ -205,6 +248,19 @@ impl NeuralNetwork {
             r[i] = if l_data[i] > 0.0 { 1.0 } else { 0.0 };
         }
         Matrix::with_data(l.row(), l.col(), r)
+    }
+
+    pub fn softmax(mut z: Matrix) -> Matrix {
+        let z_data = z.get_data_mut();
+        let mut sum = 0.0;
+        for i in 0..z_data.len() {
+            z_data[i] = z_data[i].exp();
+            sum += z_data[i];
+        }
+        for i in 0..z_data.len() {
+            z_data[i] /= sum;
+        }
+        z
     }
 }
 
@@ -234,6 +290,33 @@ pub enum Error {
 impl From<matrix::Error> for Error {
     fn from(_: matrix::Error) -> Self {
         Error::ComputeError
+    }
+}
+
+impl PartialEq for Activation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Activation::Sigmoid, Activation::Sigmoid) => true,
+            (Activation::Relu, Activation::Relu) => true,
+            _ => false,
+        }
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+impl Display for Activation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Activation::Sigmoid => "Sigmoid",
+                Activation::Relu => "Relu",
+            }
+        )
     }
 }
 
